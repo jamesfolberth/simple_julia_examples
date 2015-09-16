@@ -1,1 +1,4 @@
-introducing_julia_wikibook.pdf
+
+*.o
+*.so
+
