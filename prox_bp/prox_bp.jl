@@ -1,5 +1,5 @@
 """
-Some experiments with Nesterov acceleration on the relaxed basis pursuit:
+Some experiments with Nesterov acceleration on the basis pursuit denoising problem:
 
    min_x 0.5||A*x-b||_2^2 + lambda*||x||_1
 
@@ -16,11 +16,12 @@ Basis pursuit via a few proximal gradient methods.
    
    min_x 0.5||A*x-b||_2^2 + lambda*||x||_1
 
-`step=:fixed` - use the keyword arg `step_size` as the fixed step size
-`step=:btls` - use a simple backtracking line search, starting with `step_size`
-`step=:fista_fixed` - FISTA with a fixed step size `step_size`
+`step=:fixed` - proximal gradient descent with constant step size `step_size`.
+`step=:btls` - proximal GD with a simple backtracking line search, starting with `step_size`.
+`step=:fista_fixed` - FISTA with a fixed step size `step_size`.
 `step=:fista_btls1` - FISTA with a simple bactracking line search, starting with `step_size`.
-`step=:fista_btls2` - FISTA with a simple bactracking line search, starting with `step_size`.
+`step=:fista_btls2` - FISTA with another simple bactracking line search, starting with `step_size`.
+`step=:nest_fixed` - Nesterov acceleration with a fixed step size `step_size`.
 """
 function bp{T<:Real}(
       A::AbstractArray{T,2},
@@ -37,7 +38,9 @@ function bp{T<:Real}(
    x = Array{T}(zeros(n))
    if step in (:fista_fixed, :fista_btls1, :fista_btls2)
       xprev = Array{T}(zeros(n))
-      #nu = Array{T}(zeros(n)) # for FISTA reformulation
+
+   elseif step in (:nest_fixed, :nest_btls)
+      nu = Array{T}(zeros(n))
    end
    
    if testing
@@ -74,6 +77,27 @@ function bp{T<:Real}(
          x, tk = fista_btls1(_x->0.5*norm(A*_x-b,2)^2,
             _x->A.'*(A*_x-b),
             lambda, y, tk, bt_red)
+
+      elseif step == :fista_btls2
+         error("Not implemented!")
+
+      elseif step == :nest_fixed
+         tk = step_size
+         theta_k = T(2.0/(k+1.0))
+         y = T(1.0-theta_k)*x + theta_k*nu
+         grad = A.'*(A*y-b)
+         nu = prox_l1(nu - tk/theta_k*grad, tk/theta_k*lambda)
+         x = T(1.0-theta_k)*x + theta_k*nu
+
+      elseif step == :nest_btls
+         theta_k = T(2.0/(k+1.0))
+         y = T(1.0-theta_k)*x + theta_k*nu
+         
+         nu, tk = nest_btls(_x->0.5*norm(A*_x-b,2)^2,
+            _x->A.'*(A*_x-b),
+            lambda, nu, y, theta_k, tk, bt_red)
+         
+         x = T(1.0-theta_k)*x + theta_k*nu
 
       else
          error("Unknown step type $(step)")
@@ -178,7 +202,44 @@ function fista_btls1{T<:Real}(
    return xk, tk
 end 
 
+"""
+simple backtracking line search method for Nesterov's second method
+`f` - f(x) = 0.5*||A*x-b||_2^2
+`grad` - grad(x) = ∇f(x) = A.'*(A*x-b)
+`nu` - mix of current x and previous nu
+`y` - mix of current x and current nu, used for gradient
+`t` - step size to start with
+`bt_red` - backtracking step size reduction factor
+"""
+function nest_btls{T<:Real}(
+      f::Function,
+      grad::Function,
+      lambda::T,
+      nu::Array{T,1},
+      y::Array{T,1},
+      theta_k::T,
+      t::T,
+      bt_red::T)
+   
+   fy = f(y)
+   grady = grad(y)
 
+   tk = t
+   
+   nuk = prox_l1(nu-tk/theta_k*grad(y), tk/theta_k*lambda)
+   fnuk = f(nuk)
+   upper_bnd = fy + dot(grady, nuk-y) + T(1.0/(2.0*tk))*norm(nuk-y,2)^2
+   
+   while fnuk > upper_bnd
+      tk *= bt_red
+
+      nuk = prox_l1(nu-tk*grad(y), tk*lambda)
+      fnuk = f(nuk)
+      upper_bnd = fy + dot(grady, nuk-y) + T(1.0/(2.0*tk))*norm(nuk-y,2)^2
+   end 
+
+   return nuk, tk
+end 
 
 
 ## testing ##
@@ -201,7 +262,7 @@ function run(;timing=false)
    m = 2000; n = 1000;
    #A = 2.0*rand(m,n)-1.0
    A = randn(m,n)
-   x = rand(n); b = A*x;
+   x = rand(n); b = A*x + 0.01*randn(m);
    lambda = 1.0
    fs = 0.5*norm(A*x-b,2)^2+lambda*norm(x,1)
    L = eigmax(A.'*A) # Lipschitz
@@ -211,12 +272,16 @@ function run(;timing=false)
       @time fvals_btls = bp(A, b, lambda=lambda, testing=true, step=:btls, step_size=1e-3)
       @time fvals_fista_fixed = bp(A, b, lambda=lambda, testing=true, step=:fista_fixed, step_size=1.0/L)
       @time fvals_fista_btls1 = bp(A, b, lambda=lambda, testing=true, step=:fista_btls1, step_size=1e-3)
+      @time fvals_nest_fixed = bp(A, b, lambda=lambda, testing=true, step=:nest_fixed, step_size=1.0/L)
+      @time fvals_nest_btls = bp(A, b, lambda=lambda, testing=true, step=:nest_btls, step_size=1e-3)
       return
    else
       fvals_fixed = bp(A, b, lambda=lambda, testing=true, step=:fixed, step_size=1.0/L)
       fvals_btls = bp(A, b, lambda=lambda, testing=true, step=:btls, step_size=1e-3)
       fvals_fista_fixed = bp(A, b, lambda=lambda, testing=true, step=:fista_fixed, step_size=1.0/L)
       fvals_fista_btls1 = bp(A, b, lambda=lambda, testing=true, step=:fista_btls1, step_size=1e-3)
+      fvals_nest_fixed = bp(A, b, lambda=lambda, testing=true, step=:nest_fixed, step_size=1.0/L)
+      fvals_nest_btls = bp(A, b, lambda=lambda, testing=true, step=:nest_btls, step_size=1e-3)
    end
   
    clf()
@@ -225,6 +290,8 @@ function run(;timing=false)
    plot_rel_err(fvals_btls, fs, "r-")
    plot_rel_err(fvals_fista_fixed, fs, "g-")
    plot_rel_err(fvals_fista_btls1, fs, "g--")
+   plot_rel_err(fvals_nest_fixed, fs, "m-")
+   plot_rel_err(fvals_nest_btls, fs, "m--")
 end
 
 run()
