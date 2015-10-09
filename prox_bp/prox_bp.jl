@@ -10,6 +10,9 @@ See L. Vandenberghe's lecture notes for details.
 module prox_bp
 
 using PyPlot # only for testing
+using Convex # only for testing
+using SCS    # only for testing
+#TODO install Mosek and Gurobi
 
 """
 Basis pursuit via a few proximal gradient methods.
@@ -22,6 +25,7 @@ Basis pursuit via a few proximal gradient methods.
 `step=:fista_btls1` - FISTA with a simple bactracking line search, starting with `step_size`.
 `step=:fista_btls2` - FISTA with another simple bactracking line search, starting with `step_size`.
 `step=:nest_fixed` - Nesterov acceleration with a fixed step size `step_size`.
+`step=:nest_btls` - Nesterov acceleration with a simple backtracking line search, starting with `step_size`.
 """
 function bp{T<:Real}(
       A::AbstractArray{T,2},
@@ -82,6 +86,14 @@ function bp{T<:Real}(
          error("Not implemented!")
 
       elseif step == :nest_fixed
+         #XXX this is a temporary hack
+         #if k > 40 # do simple GD
+         #   tk = step_size
+         #   grad = A.'*(A*x-b)
+         #   x = prox_l1(x-tk*grad, lambda*tk)
+         #   continue
+         #end
+   
          tk = step_size
          theta_k = T(2.0/(k+1.0))
          y = T(1.0-theta_k)*x + theta_k*nu
@@ -243,9 +255,9 @@ end
 
 
 ## testing ##
-function plot_rel_err(fvals, fs=0, fmt_str="b-")
+function plot_rel_err(fvals, fs=-1, fmt_str="b-")
    
-   if fs == 0
+   if fs == -1
       fs = fvals[end]
    end
 
@@ -260,11 +272,19 @@ end
 
 function run(;timing=false)
    m = 2000; n = 1000;
-   #A = 2.0*rand(m,n)-1.0
+   k = 100; # sparsity level
    A = randn(m,n)
-   x = rand(n); b = A*x + 0.01*randn(m);
+
+   # x is k-sparse
+   x = zeros(n);
+   inds = randperm(n)[1:k] 
+   for ind in inds
+      x[ind] = randn()
+   end
+
+   b = A*x;
    lambda = 1.0
-   fs = 0.5*norm(A*x-b,2)^2+lambda*norm(x,1)
+   
    L = eigmax(A.'*A) # Lipschitz
    
    if timing
@@ -283,7 +303,19 @@ function run(;timing=false)
       fvals_nest_fixed = bp(A, b, lambda=lambda, testing=true, step=:nest_fixed, step_size=1.0/L)
       fvals_nest_btls = bp(A, b, lambda=lambda, testing=true, step=:nest_btls, step_size=1e-3)
    end
-  
+
+   # we have the optimal poitn by construction
+   #fs = 0.5*norm(A*x-b,2)^2+lambda*norm(x,1)
+
+   # solve this with Convex.jl
+   # passing in verbose=0 to hide output from SCS
+   solver = SCSSolver(verbose=0)
+   set_default_solver(solver);
+   xc = Variable(n)
+   p = minimize(0.5*norm(A*xc-b,2)^2+lambda*norm(xc,1))
+   solve!(p)
+   fs = p.optval
+
    clf()
    #fs = minimum(map(x->minimum(x), (fvals_fixed, fvals_btls, fvals_fista_fixed, fvals_fista_btls1)))
    plot_rel_err(fvals_fixed, fs)
@@ -292,9 +324,12 @@ function run(;timing=false)
    plot_rel_err(fvals_fista_btls1, fs, "g--")
    plot_rel_err(fvals_nest_fixed, fs, "m-")
    plot_rel_err(fvals_nest_btls, fs, "m--")
+
+   legend(["GD fixed", "GD BTLS", "FISTA fixed", "FISTA BTLS", "Nest2 fixed",
+      "Nest2 BTLS"], loc="upper right")
 end
 
 run()
-run(timing=true)
+#run(timing=true)
 
 end # prox_bp
