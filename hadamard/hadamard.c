@@ -77,7 +77,13 @@ void hadamard_apply_vector(double *y, double *x, unsigned m)
 }
 
 void hadamard_apply_vector_inplace(double *x, unsigned m) {
+   // Code stolen and slightly modified from
    // http://www.musicdsp.org/showone.php?id=18
+   //
+   // In some experiments, this runs slightly faster than hadamard_apply_vector,
+   // including the time for a copy
+   //
+   // James Folberth, Sep 16 2015
    unsigned log2m;
    for (log2m = 0; m > 1; m >>= 1) {
       ++log2m;
